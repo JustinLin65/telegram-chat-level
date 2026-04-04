@@ -2,15 +2,15 @@ import sqlite3
 import time
 import math
 import logging
-from telegram import Update
+from telegram import Update, BotCommand
 from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
 # --- 設定區域 ---
-TOKEN = 'YOUR_BOT_TOKEN_HERE'  # 替換成你的 Bot Token
+TOKEN = '7991236877:AAHFm0KbSCmjxnhc7AgWY8rAF8u2Fddb39s'
 DB_NAME = 'chat_levels.db'
 COOLDOWN_SECONDS = 30
-OWNER_ID = 7716734928  # 初始管理員 ID
+OWNER_ID = 0123456789  # 替換為實際擁有者的 Telegram ID
 
 # 設定日誌
 logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s', level=logging.INFO)
@@ -19,24 +19,11 @@ logging.basicConfig(format='%(asctime)s - %(name)s - %(levelname)s - %(message)s
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
-    
-    # 用戶資料表
     c.execute('''CREATE TABLE IF NOT EXISTS users
-                 (user_id INTEGER, 
-                  chat_id INTEGER, 
-                  level INTEGER, 
-                  xp INTEGER, 
-                  last_msg_time REAL,
-                  username TEXT,
-                  PRIMARY KEY (user_id, chat_id))''')
-    
-    # 管理員名單資料表
-    c.execute('''CREATE TABLE IF NOT EXISTS admins
-                 (user_id INTEGER PRIMARY KEY)''')
-    
-    # 插入初始管理員 (你)
+                 (user_id INTEGER, chat_id INTEGER, level INTEGER, xp INTEGER, 
+                  last_msg_time REAL, username TEXT, PRIMARY KEY (user_id, chat_id))''')
+    c.execute('''CREATE TABLE IF NOT EXISTS admins (user_id INTEGER PRIMARY KEY)''')
     c.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (OWNER_ID,))
-    
     conn.commit()
     conn.close()
 
@@ -52,13 +39,24 @@ def generate_progress_bar(current_xp, target_xp, bar_length=10):
     return f"`{bar}` {percentage}%"
 
 def check_db_admin(user_id):
-    """檢查資料庫中是否存在該管理員"""
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT user_id FROM admins WHERE user_id = ?", (user_id,))
     result = c.fetchone()
     conn.close()
     return result is not None
+
+# --- 設定指令列表 (選單) ---
+async def post_init(application):
+    """機器人啟動後自動設定指令選單"""
+    commands = [
+        BotCommand("rank", "📊 查詢我的等級與進度"),
+        BotCommand("addxp", "✍️ [管理員] 增加用戶經驗值"),
+        BotCommand("addadmin", "➕ [管理員] 新增管理員名單"),
+        BotCommand("deladmin", "➖ [擁有者] 移除管理員權限")
+    ]
+    await application.bot.set_my_commands(commands)
+    print("✅ 已更新指令選單列表")
 
 # --- 核心邏輯：處理訊息 ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -79,7 +77,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if result:
         level, xp, last_msg_time = result
         c.execute("UPDATE users SET username = ? WHERE user_id = ? AND chat_id = ?", (username, user_id, chat_id))
-        
         if now - last_msg_time < COOLDOWN_SECONDS:
             conn.commit()
             conn.close()
@@ -98,7 +95,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 parse_mode=ParseMode.HTML,
                 message_thread_id=thread_id
             )
-        
         c.execute("UPDATE users SET level = ?, xp = ?, last_msg_time = ? WHERE user_id = ? AND chat_id = ?",
                   (level, new_xp, now, user_id, chat_id))
     else:
@@ -107,154 +103,107 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     conn.commit()
     conn.close()
 
-# --- 指令：查詢等級 ---
+# --- 指令實作 ---
 async def rank_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     chat_id = update.effective_chat.id
-    
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT level, xp FROM users WHERE user_id = ? AND chat_id = ?", (user_id, chat_id))
     result = c.fetchone()
     conn.close()
-
     if not result:
         await update.message.reply_text("查無資料，請先在群組發言！")
         return
-
     level, xp = result
     req_xp = get_required_xp(level)
     bar = generate_progress_bar(xp, req_xp)
-    
-    text = (
-        f"📊 <b>{update.effective_user.first_name} 的等級報告</b>\n\n"
-        f"🏅 當前等級: <b>Lv.{level}</b>\n"
-        f"✨ 經驗進度: {xp} / {req_xp} XP\n"
-        f"{bar}\n\n"
-        f"距離下一級還差 <b>{req_xp - xp}</b> 次有效發言"
-    )
+    text = (f"📊 <b>{update.effective_user.first_name} 的等級報告</b>\n\n"
+            f"🏅 當前等級: <b>Lv.{level}</b>\n"
+            f"✨ 經驗進度: {xp} / {req_xp} XP\n"
+            f"{bar}\n\n"
+            f"距離下一級還差 <b>{req_xp - xp}</b> 次有效發言")
     await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
-# --- 管理員專用：增加經驗值 ---
 async def add_xp_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_db_admin(update.effective_user.id):
-        await update.message.reply_text("❌ 權限不足：你不在資料庫管理員名單中。")
+        await update.message.reply_text("❌ 權限不足。")
         return
-
     if len(context.args) < 2:
         await update.message.reply_text("💡 格式: `/addxp @username 數量`")
         return
-
     target_username = context.args[0].replace('@', '').lower()
     try:
         xp_to_add = int(context.args[1])
-    except ValueError:
+    except:
         await update.message.reply_text("❌ 經驗值必須是整數。")
         return
-
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
     c.execute("SELECT user_id, level, xp, chat_id FROM users WHERE username = ?", (target_username,))
     user_data = c.fetchone()
-
     if not user_data:
         await update.message.reply_text(f"❌ 找不到使用者 @{target_username}")
         conn.close()
         return
-
-    t_user_id, t_level, t_xp, t_chat_id = user_data
+    t_id, t_lvl, t_xp, t_chat = user_data
     new_xp = t_xp + xp_to_add
-    
     while True:
-        req_xp = get_required_xp(t_level)
-        if new_xp >= req_xp:
-            new_xp -= req_xp
-            t_level += 1
-        else:
-            break
+        req = get_required_xp(t_lvl)
+        if new_xp >= req: new_xp -= req; t_lvl += 1
+        else: break
+    c.execute("UPDATE users SET level = ?, xp = ? WHERE user_id = ? AND chat_id = ?", (t_lvl, new_xp, t_id, t_chat))
+    conn.commit(); conn.close()
+    await update.message.reply_text(f"✅ 已為 @{target_username} 增加 {xp_to_add} XP。\n目前: <b>Lv.{t_lvl}</b>", parse_mode=ParseMode.HTML)
 
-    c.execute("UPDATE users SET level = ?, xp = ? WHERE user_id = ? AND chat_id = ?", (t_level, new_xp, t_user_id, t_chat_id))
-    conn.commit()
-    conn.close()
-
-    await update.message.reply_text(f"✅ 已為 @{target_username} 增加 {xp_to_add} XP。\n目前等級: <b>Lv.{t_level}</b>", parse_mode=ParseMode.HTML)
-
-# --- 管理員專用：新增管理員 ---
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_db_admin(update.effective_user.id):
-        await update.message.reply_text("❌ 只有資料庫管理員可以新增其他管理員。")
+        await update.message.reply_text("❌ 權限不足。")
         return
-
     if not context.args:
-        await update.message.reply_text("💡 格式: `/addadmin @username` 或 `/addadmin 使用者ID`")
+        await update.message.reply_text("💡 格式: `/addadmin @username`")
         return
-
     target = context.args[0].replace('@', '').lower()
-    
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    target_id = None
-    if target.isdigit():
-        target_id = int(target)
-    else:
+    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    target_id = int(target) if target.isdigit() else None
+    if not target_id:
         c.execute("SELECT user_id FROM users WHERE username = ?", (target,))
-        result = c.fetchone()
-        if result:
-            target_id = result[0]
-
+        res = c.fetchone()
+        if res: target_id = res[0]
     if target_id:
         c.execute("INSERT OR IGNORE INTO admins (user_id) VALUES (?)", (target_id,))
         conn.commit()
-        await update.message.reply_text(f"✅ 已將 ID: `{target_id}` 加入管理員名單。", parse_mode=ParseMode.MARKDOWN)
-    else:
-        await update.message.reply_text("❌ 找不到該使用者，請確保他曾在群組發言或直接使用 ID。")
-    
-    conn.close()
-
-# --- 管理員專用：刪除管理員 ---
-async def del_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if update.effective_user.id != OWNER_ID:
-        await update.message.reply_text("❌ 只有初始擁有者可以刪除管理員權限。")
-        return
-
-    if not context.args:
-        await update.message.reply_text("💡 格式: `/deladmin @username` 或 `/deladmin 使用者ID`")
-        return
-
-    target = context.args[0].replace('@', '').lower()
-    conn = sqlite3.connect(DB_NAME)
-    c = conn.cursor()
-
-    target_id = None
-    if target.isdigit():
-        target_id = int(target)
-    else:
-        c.execute("SELECT user_id FROM users WHERE username = ?", (target,))
-        result = c.fetchone()
-        if result:
-            target_id = result[0]
-
-    if target_id == OWNER_ID:
-        await update.message.reply_text("❌ 你不能刪除自己的權限！")
-    elif target_id:
-        c.execute("DELETE FROM admins WHERE user_id = ?", (target_id,))
-        conn.commit()
-        await update.message.reply_text(f"🗑 已將 ID: `{target_id}` 從管理員名單移除。", parse_mode=ParseMode.MARKDOWN)
+        await update.message.reply_text(f"✅ 已新增管理員 ID: `{target_id}`", parse_mode=ParseMode.MARKDOWN)
     else:
         await update.message.reply_text("❌ 找不到該使用者。")
-    
+    conn.close()
+
+async def del_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_user.id != OWNER_ID:
+        await update.message.reply_text("❌ 只有擁有者可以刪除。")
+        return
+    if not context.args: return
+    target = context.args[0].replace('@', '').lower()
+    conn = sqlite3.connect(DB_NAME); c = conn.cursor()
+    target_id = int(target) if target.isdigit() else None
+    if not target_id:
+        c.execute("SELECT user_id FROM users WHERE username = ?", (target,))
+        res = c.fetchone()
+        if res: target_id = res[0]
+    if target_id and target_id != OWNER_ID:
+        c.execute("DELETE FROM admins WHERE user_id = ?", (target_id,))
+        conn.commit()
+        await update.message.reply_text(f"🗑 已移除管理員 ID: `{target_id}`", parse_mode=ParseMode.MARKDOWN)
     conn.close()
 
 if __name__ == '__main__':
     init_db()
-    app = ApplicationBuilder().token(TOKEN).build()
-
+    # 使用 post_init 來設定指令選單
+    app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app.add_handler(CommandHandler(["rank", "level"], rank_command))
+    app.add_handler(CommandHandler("rank", rank_command))
     app.add_handler(CommandHandler("addxp", add_xp_admin))
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("deladmin", del_admin_command))
-
-    print("機器人已啟動，已載入資料庫管理員名單...")
+    print("機器人正在啟動...")
     app.run_polling()
