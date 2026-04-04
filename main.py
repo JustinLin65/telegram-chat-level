@@ -58,8 +58,9 @@ async def post_init(application):
     await application.bot.set_my_commands(commands)
     print("✅ 已更新指令選單列表")
 
-# --- 核心邏輯：處理訊息 ---
+# --- 核心邏輯：處理訊息 (所有非指令訊息) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    # 確保訊息來自使用者且不是機器人
     if not update.effective_user or update.effective_user.is_bot:
         return
 
@@ -67,7 +68,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     username = update.effective_user.username.lower() if update.effective_user.username else None
     now = time.time()
-    thread_id = update.message.message_thread_id
+    
+    # 處理 Topic ID (如果是在論壇群組)
+    thread_id = None
+    if update.message:
+        thread_id = update.message.message_thread_id
 
     conn = sqlite3.connect(DB_NAME)
     c = conn.cursor()
@@ -76,7 +81,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result:
         level, xp, last_msg_time = result
+        # 更新最新 username
         c.execute("UPDATE users SET username = ? WHERE user_id = ? AND chat_id = ?", (username, user_id, chat_id))
+        
+        # 檢查冷卻時間
         if now - last_msg_time < COOLDOWN_SECONDS:
             conn.commit()
             conn.close()
@@ -98,6 +106,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("UPDATE users SET level = ?, xp = ?, last_msg_time = ? WHERE user_id = ? AND chat_id = ?",
                   (level, new_xp, now, user_id, chat_id))
     else:
+        # 新使用者初始化
         c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, chat_id, 0, 1, now, username))
 
     conn.commit()
@@ -198,12 +207,16 @@ async def del_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 if __name__ == '__main__':
     init_db()
-    # 使用 post_init 來設定指令選單
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
-    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+
+    # 修正：將 filters.SERVICE 改為 filters.StatusUpdate.ALL
+    # 這會過濾掉系統訊息（如成員加入、置頂訊息等），確保只有用戶發送的內容（文字、媒體、貼圖）會計入 XP
+    app.add_handler(MessageHandler((~filters.COMMAND) & (~filters.StatusUpdate.ALL), handle_message))
+    
     app.add_handler(CommandHandler("rank", rank_command))
     app.add_handler(CommandHandler("addxp", add_xp_admin))
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("deladmin", del_admin_command))
+
     print("機器人正在啟動...")
     app.run_polling()
