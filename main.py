@@ -1,3 +1,5 @@
+# --- 等級系統機器人 (Level Bot) ---
+# 新增等級修改指令，讓管理員可以直接增加用戶等級，並且確保經驗、等級不會低於 0
 import sqlite3
 import time
 import math
@@ -29,6 +31,7 @@ def init_db():
 
 # --- 工具函數 ---
 def get_required_xp(level):
+    # 標準 RPG 二次模型: 5L^2 + 50L + 10
     return 5 * (level**2) + 50 * level + 10
 
 def generate_progress_bar(current_xp, target_xp, bar_length=10):
@@ -52,6 +55,7 @@ async def post_init(application):
     commands = [
         BotCommand("rank", "📊 查詢我的等級與進度"),
         BotCommand("addxp", "✍️ [管理員] 增加用戶經驗值"),
+        BotCommand("addrank", "🆙 [管理員] 直接增加用戶等級"),
         BotCommand("addadmin", "➕ [管理員] 新增管理員名單"),
         BotCommand("deladmin", "➖ [擁有者] 移除管理員權限")
     ]
@@ -60,7 +64,6 @@ async def post_init(application):
 
 # --- 核心邏輯：處理訊息 (所有非指令訊息) ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    # 確保訊息來自使用者且不是機器人
     if not update.effective_user or update.effective_user.is_bot:
         return
 
@@ -69,7 +72,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     username = update.effective_user.username.lower() if update.effective_user.username else None
     now = time.time()
     
-    # 處理 Topic ID (如果是在論壇群組)
     thread_id = None
     if update.message:
         thread_id = update.message.message_thread_id
@@ -81,10 +83,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     if result:
         level, xp, last_msg_time = result
-        # 更新最新 username
         c.execute("UPDATE users SET username = ? WHERE user_id = ? AND chat_id = ?", (username, user_id, chat_id))
         
-        # 檢查冷卻時間
         if now - last_msg_time < COOLDOWN_SECONDS:
             conn.commit()
             conn.close()
@@ -106,7 +106,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         c.execute("UPDATE users SET level = ?, xp = ?, last_msg_time = ? WHERE user_id = ? AND chat_id = ?",
                   (level, new_xp, now, user_id, chat_id))
     else:
-        # 新使用者初始化
         c.execute("INSERT INTO users VALUES (?, ?, ?, ?, ?, ?)", (user_id, chat_id, 0, 1, now, username))
 
     conn.commit()
@@ -155,15 +154,64 @@ async def add_xp_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text(f"❌ 找不到使用者 @{target_username}")
         conn.close()
         return
+    
     t_id, t_lvl, t_xp, t_chat = user_data
     new_xp = t_xp + xp_to_add
-    while True:
-        req = get_required_xp(t_lvl)
-        if new_xp >= req: new_xp -= req; t_lvl += 1
-        else: break
+    
+    # --- 防負數與升/降級處理邏輯 ---
+    # 處理增加 XP (可能多次升級)
+    while new_xp >= get_required_xp(t_lvl):
+        new_xp -= get_required_xp(t_lvl)
+        t_lvl += 1
+        
+    # 處理減少 XP (可能多次降級)
+    while new_xp < 0 and t_lvl > 0:
+        t_lvl -= 1
+        new_xp += get_required_xp(t_lvl)
+        
+    # 最後底線：如果等級降到 0 且 XP 還是負值，強制歸零
+    if t_lvl == 0 and new_xp < 0:
+        new_xp = 0
+        
     c.execute("UPDATE users SET level = ?, xp = ? WHERE user_id = ? AND chat_id = ?", (t_lvl, new_xp, t_id, t_chat))
     conn.commit(); conn.close()
-    await update.message.reply_text(f"✅ 已為 @{target_username} 增加 {xp_to_add} XP。\n目前: <b>Lv.{t_lvl}</b>", parse_mode=ParseMode.HTML)
+    await update.message.reply_text(f"✅ 已調整 @{target_username} 的經驗值。\n目前狀態: <b>Lv.{t_lvl}</b> (XP: {new_xp})", parse_mode=ParseMode.HTML)
+
+# 指令：直接增加等級
+async def add_rank_admin(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not check_db_admin(update.effective_user.id):
+        await update.message.reply_text("❌ 權限不足。")
+        return
+    if len(context.args) < 2:
+        await update.message.reply_text("💡 格式: `/addrank @username 等級數`")
+        return
+    target_username = context.args[0].replace('@', '').lower()
+    try:
+        ranks_to_add = int(context.args[1])
+    except:
+        await update.message.reply_text("❌ 等級數必須是整數。")
+        return
+    
+    conn = sqlite3.connect(DB_NAME)
+    c = conn.cursor()
+    c.execute("SELECT user_id, level, xp, chat_id FROM users WHERE username = ?", (target_username,))
+    user_data = c.fetchone()
+    if not user_data:
+        await update.message.reply_text(f"❌ 找不到使用者 @{target_username}")
+        conn.close()
+        return
+    
+    t_id, t_lvl, t_xp, t_chat = user_data
+    new_lvl = t_lvl + ranks_to_add
+    # 確保等級底線為 0
+    if new_lvl < 0:
+        new_lvl = 0
+        # 如果等級被扣到 0，經驗值也應該清空
+        t_xp = 0
+    
+    c.execute("UPDATE users SET level = ?, xp = ? WHERE user_id = ? AND chat_id = ?", (new_lvl, t_xp, t_id, t_chat))
+    conn.commit(); conn.close()
+    await update.message.reply_text(f"✅ 已調整 @{target_username} 的等級。\n目前等級: <b>Lv.{new_lvl}</b>", parse_mode=ParseMode.HTML)
 
 async def add_admin_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not check_db_admin(update.effective_user.id):
@@ -209,12 +257,12 @@ if __name__ == '__main__':
     init_db()
     app = ApplicationBuilder().token(TOKEN).post_init(post_init).build()
 
-    # 修正：將 filters.SERVICE 改為 filters.StatusUpdate.ALL
-    # 這會過濾掉系統訊息（如成員加入、置頂訊息等），確保只有用戶發送的內容（文字、媒體、貼圖）會計入 XP
+    # 過濾掉指令與系統訊息，支援所有類型內容計入 XP
     app.add_handler(MessageHandler((~filters.COMMAND) & (~filters.StatusUpdate.ALL), handle_message))
     
     app.add_handler(CommandHandler("rank", rank_command))
     app.add_handler(CommandHandler("addxp", add_xp_admin))
+    app.add_handler(CommandHandler("addrank", add_rank_admin))
     app.add_handler(CommandHandler("addadmin", add_admin_command))
     app.add_handler(CommandHandler("deladmin", del_admin_command))
 
