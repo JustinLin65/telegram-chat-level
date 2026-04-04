@@ -7,7 +7,7 @@ from telegram.constants import ParseMode
 from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, CommandHandler, filters
 
 # --- 設定區域 ---
-TOKEN = '7991236877:AAHFm0KbSCmjxnhc7AgWY8rAF8u2Fddb39s'
+TOKEN = '0123456789:AABBcd123efGHij45kl67'
 DB_NAME = 'chat_levels.db'
 COOLDOWN_SECONDS = 30
 OWNER_ID = 0123456789  # 替換為實際擁有者的 Telegram ID
