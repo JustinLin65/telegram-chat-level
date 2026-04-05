@@ -14,8 +14,8 @@ load_dotenv()
 TOKEN = os.getenv('TG_BOT_TOKEN')
 DB_NAME = 'chat_levels.db'
 COOLDOWN_SECONDS = 30
-OWNER_ID = 7716734928  # 初始管理員 ID
-ITEMS_PER_PAGE = 10     # 每頁顯示人數
+OWNER_ID = 1234567890    # 初始管理員 ID
+ITEMS_PER_PAGE = 10      # /top每頁顯示人數
 AUTO_DELETE_SECONDS = 60 # 自動刪除訊息的秒數
 
 # 設定日誌
@@ -70,6 +70,9 @@ async def delete_message_job(context: ContextTypes.DEFAULT_TYPE):
             pass
 
 def schedule_deletion(context: ContextTypes.DEFAULT_TYPE, chat_id, message_ids):
+    if not context.job_queue:
+        logging.error("❌ JobQueue 未初始化！自動刪除功能將無法運作。請確保安裝了 'python-telegram-bot[job-queue]'。")
+        return
     if not isinstance(message_ids, list):
         message_ids = [message_ids]
     context.job_queue.run_once(

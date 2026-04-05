@@ -32,7 +32,7 @@ pip install -r requirements.txt
    編輯 `main.py` 中的 `OWNER_ID`：
 
    ```python
-   OWNER_ID = 7716734928  # 你的 Telegram ID
+   OWNER_ID = 0123456789  # 你的 Telegram ID
    ```
 
 ## 指令說明

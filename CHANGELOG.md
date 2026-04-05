@@ -3,6 +3,19 @@
 本專案的所有顯著變更將記錄在此檔案中。
 格式參考自 [Keep a Changelog](https://keepachangelog.com/zh-TW/1.1.0/)。
 
+## [2.1.1] - 2026-04
+
+### Fixed
+
+- **修復 JobQueue 崩潰問題**：
+    - 解決了因未安裝 `apscheduler` 導致 `context.job_queue` 為 `None` 並引發 `AttributeError` 的問題。
+    - 在 `schedule_deletion` 函數中加入防護邏輯，確保在環境未備妥時不會導致程式中斷。
+
+### Changed
+
+- **更新依賴需求**：
+    - 將 `requirements.txt` 中的 `python-telegram-bot` 變更為 `python-telegram-bot[job-queue]`。
+
 ## [2.1.0] - 2026-04
 
 ### Added
