@@ -1,2 +1,3 @@
 python-telegram-bot[job-queue]>=20.0
 python-dotenv
+h11>=0.16.0 # not directly required, pinned by Snyk to avoid a vulnerability
